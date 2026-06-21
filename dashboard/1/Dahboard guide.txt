@@ -1,0 +1,171 @@
+﻿Ah, you want an HTML-based dashboard!
+If you want to view your project's dashboard on a PC, smartphone, or tablet web browser, you can absolutely do that. However, because the STC89 board cannot load a web browser or run a heavy web server on its own, you need a way to send the data from your board to your computer.
+The most reliable way to do this is to use the Serial (UART to USB) port on your STC89 dev board to send data to your PC, and then use a lightweight script on your PC to push that data to an HTML page.
+Step 1: The STC89 Code (Sending Data)
+Your STC89 board just needs to read its sensors and print the data out of its serial port as text (for example, sending "25,60" for 25°C and 60% humidity).
+C
+#include <reg51.h>
+
+
+void UART_Init() {
+    TMOD = 0x20; // Timer 1, mode 2 (8-bit auto-reload)
+    TH1 = 0xFD;  // 9600 Baud rate (assuming 11.0592 MHz crystal)
+    SCON = 0x50; // 8-bit UART, enable receiver
+    TR1 = 1;     // Start Timer 1
+}
+
+
+void UART_SendChar(char c) {
+    SBUF = c;
+    while(TI == 0);
+    TI = 0;
+}
+
+
+void UART_SendString(char* str) {
+    while(*str) {
+        UART_SendChar(*str++);
+    }
+}
+
+
+void main() {
+    UART_Init();
+    while(1) {
+        // Simulating sending data: "Temperature,Humidity"
+        UART_SendString("25,60\n"); 
+        
+        // Add a delay here before sending the next reading
+    }
+}
+Step 2: The HTML Dashboard Bridge
+Browsers cannot talk directly to hardware COM ports for security reasons. The easiest modern way to bridge this gap without writing heavy backend code is using the Web Serial API directly inside your HTML/JavaScript file.
+Save the following code as an index.html file on your PC. You can open it in Google Chrome or Microsoft Edge, click "Connect", and select your STC89 development board's COM port.
+HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STC89 Project Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e24;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        h1 { margin-bottom: 20px; color: #4fc3f7; }
+        .grid { display: flex; gap: 20px; }
+        .card {
+            background-color: #2a2a35;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            min-width: 150px;
+        }
+        .card h3 { margin: 0 0 10px 0; color: #aaa; text-transform: uppercase; font-size: 0.9rem; }
+        .value { font-size: 2.5rem; font-weight: bold; color: #fff; }
+        button {
+            padding: 12px 24px;
+            background-color: #4fc3f7;
+            border: none;
+            border-radius: 6px;
+            color: #1e1e24;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 30px;
+            transition: 0.2s;
+        }
+        button:hover { background-color: #29b6f6; }
+    </style>
+</head>
+<body>
+
+
+    <h1>STC89 Telemetry Dashboard</h1>
+    <button id="connectBtn">Connect to STC89 Board</button>
+
+
+    <div class="grid">
+        <div class="card">
+            <h3>Temperature</h3>
+            <div class="value" id="tempCell">-- °C</div>
+        </div>
+        <div class="card">
+            <h3>Humidity</h3>
+            <div class="value" id="humidCell">-- %</div>
+        </div>
+    </div>
+
+
+    <script>
+        const connectBtn = document.getElementById('connectBtn');
+        const tempCell = document.getElementById('tempCell');
+        const humidCell = document.getElementById('humidCell');
+
+
+        connectBtn.addEventListener('click', async () => {
+            if ('serial' in navigator) {
+                try {
+                    // Request a port and open a connection.
+                    const port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 9600 }); // Must match STC89 baud rate
+                    
+                    connectBtn.textContent = "Connected!";
+                    connectBtn.style.backgroundColor = "#66bb6a";
+
+
+                    const textDecoder = new TextDecoderStream();
+                    const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+                    const reader = textDecoder.readable.getReader();
+
+
+                    let buffer = "";
+
+
+                    // Listen to data from the serial port
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) {
+                            reader.releaseLock();
+                            break;
+                        }
+                        if (value) {
+                            buffer += value;
+                            // Check if a full line (\n) has arrived
+                            if (buffer.includes('\n')) {
+                                const lines = buffer.split('\n');
+                                buffer = lines.pop(); // Keep incomplete line in buffer
+                                
+                                const latestData = lines[lines.length - 1].trim();
+                                const dataArray = latestData.split(','); // Split "25,60"
+                                
+                                if(dataArray.length === 2) {
+                                    tempCell.textContent = dataArray[0] + " °C";
+                                    humidCell.textContent = dataArray[1] + " %";
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error("Serial connection failed:", error);
+                    alert("Failed to connect. Make sure the port isn't open in STC-ISP.");
+                }
+            } else {
+                alert("Web Serial API not supported in this browser. Please use Chrome or Edge.");
+            }
+        });
+    </script>
+</body>
+</html>
+How to use this:
+1. Flash your STC89 board with the C code using STC-ISP (make sure to close STC-ISP's COM port monitor afterward, or the browser won't be allowed to connect to it).
+2. Double-click the index.html file to open it in Chrome or Edge.
+3. Click Connect to STC89 Board, choose the COM port your board is plugged into, and watch your dashboard update live!
